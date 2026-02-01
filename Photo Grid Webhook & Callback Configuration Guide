@@ -1,0 +1,653 @@
+# Photo Grid Webhook & Callback Configuration Guide
+
+**Last Updated: February 1, 2026**
+
+---
+
+## Overview
+
+This document provides technical guidance for configuring webhooks and callbacks for the Photo Grid application. Webhooks enable real-time updates from Meta's Instagram API, allowing Photo Grid to receive notifications about Instagram account changes, new posts, and engagement metrics without continuous polling.
+
+---
+
+## What is a Webhook?
+
+A webhook is an HTTP callback that allows Photo Grid to receive real-time notifications from Meta's servers when specific events occur on your Instagram business account. Instead of constantly checking for updates, Meta pushes data to your application whenever an event happens.
+
+**Benefits:**
+- Real-time data synchronization
+- Reduced server load (no continuous polling)
+- Improved app responsiveness
+- Cost-effective data retrieval
+
+---
+
+## Photo Grid Webhook Architecture
+
+### Supported Events
+
+Photo Grid can receive webhooks for the following Instagram events:
+
+| Event Type | Description | Trigger |
+|------------|-------------|---------|
+| `instagram_business_account` | Account changes and updates | Profile changes, follower count updates |
+| `instagram_business_content_node` | New posts and content updates | New posts, edited captions, post deletions |
+| `instagram_shop_product_catalog` | Shop product updates | Product catalog changes (if applicable) |
+| `message_echoes` | Messaging activity | New messages received |
+| `instagram_comment` | Comment activity | New comments on posts |
+
+### Webhook Payload Structure
+
+All webhooks sent to Photo Grid follow this structure:
+
+```json
+{
+  "object": "instagram",
+  "entry": [
+    {
+      "id": "user_id",
+      "time": 1643645321,
+      "changes": [
+        {
+          "field": "instagram_business_account",
+          "value": {
+            "id": "account_id",
+            "username": "business_account_username",
+            "name": "Business Account Name",
+            "biography": "Account bio text",
+            "website": "https://example.com",
+            "profile_picture_url": "https://...",
+            "followers_count": 15000,
+            "follows_count": 500,
+            "media_count": 250,
+            "ig_id": "1234567890"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## Setting Up Your Webhook URL
+
+### Step 1: Prepare Your Callback URL
+
+Your webhook callback URL must meet these requirements:
+
+**URL Requirements:**
+- ✅ Publicly accessible (no private/local networks)
+- ✅ HTTPS only (SSL/TLS certificate required)
+- ✅ HTTP/2 compatible
+- ✅ Returns HTTP 200 response within 30 seconds
+- ✅ Valid domain with proper DNS configuration
+- ✅ No authentication redirects (no 301/302 redirects)
+- ✅ Supports both GET and POST requests
+
+**Example Valid URL:**
+```
+https://photogrid.yourdomain.com/webhooks/instagram
+```
+
+### Step 2: Generate Verify Token
+
+A verify token is a security measure that Meta uses to confirm your webhook endpoint is controlled by you.
+
+**Generate your verify token:**
+1. Create a random alphanumeric string (minimum 32 characters)
+2. Store it securely in your application's environment variables
+3. You'll provide this token to Meta during webhook setup
+
+**Example verify token:**
+```
+a7f3e8b2c9d4e1f6a5b8c2d9e3f6a1b4c7d0e3f6a9b2c5d8e1f4a7b0c3d6
+```
+
+---
+
+## Webhook Verification Flow
+
+When you first configure your webhook URL, Meta will verify that you own it.
+
+### Verification Request (GET)
+
+Meta sends a GET request to your callback URL:
+
+```
+GET https://photogrid.yourdomain.com/webhooks/instagram?
+  hub.mode=subscribe&
+  hub.challenge=random_challenge_string&
+  hub.verify_token=YOUR_VERIFY_TOKEN
+```
+
+**Query Parameters:**
+- `hub.mode` - Always "subscribe"
+- `hub.challenge` - Random string you must echo back
+- `hub.verify_token` - Your verify token (must match)
+
+### Your Verification Response
+
+Your webhook endpoint must respond with:
+
+```json
+{
+  "hub.challenge": "random_challenge_string"
+}
+```
+
+**Example Response (HTTP 200):**
+```
+Status: 200 OK
+Content-Type: application/json
+
+{
+  "hub.challenge": "random_challenge_string"
+}
+```
+
+---
+
+## Webhook Implementation Example
+
+### Node.js/Express Example
+
+```javascript
+const express = require('express');
+const app = express();
+
+app.use(express.json());
+
+const VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN;
+const WEBHOOK_URL = process.env.WEBHOOK_URL;
+
+// Webhook verification (GET request)
+app.get('/webhooks/instagram', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  // Verify token matches
+  if (mode && token === VERIFY_TOKEN) {
+    res.status(200).send(challenge);
+    console.log('Webhook verified successfully');
+  } else {
+    res.sendStatus(403);
+    console.log('Webhook verification failed');
+  }
+});
+
+// Webhook event receiver (POST request)
+app.post('/webhooks/instagram', (req, res) => {
+  const body = req.body;
+
+  // Always respond with 200 OK immediately
+  res.status(200).send('ok');
+
+  // Process webhook asynchronously
+  if (body.object === 'instagram') {
+    body.entry.forEach((entry) => {
+      entry.changes.forEach((change) => {
+        console.log('Webhook event received:');
+        console.log('Field:', change.field);
+        console.log('Value:', change.value);
+
+        // Handle specific event types
+        switch (change.field) {
+          case 'instagram_business_account':
+            handleAccountUpdate(change.value);
+            break;
+          case 'instagram_business_content_node':
+            handleContentUpdate(change.value);
+            break;
+          default:
+            console.log('Unknown field:', change.field);
+        }
+      });
+    });
+  }
+});
+
+function handleAccountUpdate(data) {
+  console.log('Account update:', data.username);
+  // Update Photo Grid database with account info
+}
+
+function handleContentUpdate(data) {
+  console.log('Content update:', data);
+  // Sync new posts to Photo Grid
+}
+
+app.listen(3000, () => {
+  console.log('Webhook server listening on port 3000');
+});
+```
+
+### Python/Flask Example
+
+```python
+from flask import Flask, request
+import os
+import json
+
+app = Flask(__name__)
+
+VERIFY_TOKEN = os.environ.get('WEBHOOK_VERIFY_TOKEN')
+
+@app.route('/webhooks/instagram', methods=['GET'])
+def webhook_verify():
+    """Webhook verification endpoint"""
+    mode = request.args.get('hub.mode')
+    token = request.args.get('hub.verify_token')
+    challenge = request.args.get('hub.challenge')
+
+    if mode and token == VERIFY_TOKEN:
+        return challenge, 200
+    else:
+        return 'Forbidden', 403
+
+@app.route('/webhooks/instagram', methods=['POST'])
+def webhook_receive():
+    """Webhook event receiver"""
+    data = request.get_json()
+
+    # Always respond with 200 OK immediately
+    response = {'status': 'ok'}, 200
+
+    # Process webhook asynchronously
+    if data.get('object') == 'instagram':
+        for entry in data.get('entry', []):
+            for change in entry.get('changes', []):
+                field = change.get('field')
+                value = change.get('value')
+
+                print(f'Webhook event: {field}')
+                print(f'Value: {value}')
+
+                if field == 'instagram_business_account':
+                    handle_account_update(value)
+                elif field == 'instagram_business_content_node':
+                    handle_content_update(value)
+
+    return response
+
+def handle_account_update(data):
+    """Handle Instagram account updates"""
+    print(f"Account update for: {data.get('username')}")
+    # Update Photo Grid database
+
+def handle_content_update(data):
+    """Handle Instagram content updates"""
+    print(f"Content update: {data}")
+    # Sync new posts to Photo Grid
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=False)
+```
+
+---
+
+## Configuring Webhook in Meta Developer Dashboard
+
+### Prerequisites
+
+- Meta Developer Account
+- Published Instagram app
+- Instagram Business Account connected to app
+- Public webhook URL ready
+
+### Configuration Steps
+
+1. **Navigate to App Settings**
+   - Go to Meta Developers dashboard
+   - Select your Photo Grid app
+   - Navigate to Settings > Basic
+
+2. **Configure Webhooks**
+   - Go to Messenger > Settings (or relevant product)
+   - Find "Webhooks" section
+   - Click "Add Product" or "Edit Subscription"
+
+3. **Enter Callback URL**
+   - Paste your webhook URL: `https://photogrid.yourdomain.com/webhooks/instagram`
+   - This URL must be publicly accessible and return 200 OK within 30 seconds
+
+4. **Enter Verify Token**
+   - Paste your generated verify token
+   - This token must match what your endpoint expects
+
+5. **Select Webhook Fields**
+   - Choose which events to subscribe to:
+     - `instagram_business_account` (account changes)
+     - `instagram_business_content_node` (new posts)
+     - `message_echoes` (messages)
+     - `instagram_comment` (comments)
+
+6. **Verify and Save**
+   - Meta will send a GET request to verify your webhook
+   - Your endpoint must echo back the challenge parameter
+   - Once verified, click "Verify and Save"
+
+---
+
+## Security Best Practices
+
+### 1. Validate Incoming Webhooks
+
+Always verify that webhook requests come from Meta:
+
+```javascript
+const crypto = require('crypto');
+
+function verifyWebhookSignature(req) {
+  const signature = req.get('X-Hub-Signature');
+  const appSecret = process.env.APP_SECRET;
+  const body = req.rawBody; // Raw request body as string
+
+  const hash = crypto
+    .createHmac('sha1', appSecret)
+    .update(body)
+    .digest('hex');
+
+  const expectedSignature = `sha1=${hash}`;
+  
+  return signature === expectedSignature;
+}
+
+app.post('/webhooks/instagram', (req, res) => {
+  // Verify signature
+  if (!verifyWebhookSignature(req)) {
+    return res.status(403).send('Forbidden');
+  }
+
+  // Process webhook
+  res.status(200).send('ok');
+});
+```
+
+### 2. Use Environment Variables
+
+Never hardcode tokens or secrets:
+
+```bash
+# .env file
+WEBHOOK_VERIFY_TOKEN=a7f3e8b2c9d4e1f6a5b8c2d9e3f6a1b4c7d0e3f6a9b2c5d8e1f4a7b0c3d6
+APP_SECRET=your_app_secret_here
+WEBHOOK_URL=https://photogrid.yourdomain.com/webhooks/instagram
+```
+
+### 3. HTTPS Only
+
+- Use valid SSL/TLS certificates
+- Renew certificates before expiration
+- Use services like Let's Encrypt (free)
+
+### 4. Rate Limiting
+
+Implement rate limiting to prevent abuse:
+
+```javascript
+const rateLimit = require('express-rate-limit');
+
+const webhookLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 1000, // limit each IP to 1000 requests per windowMs
+  message: 'Too many webhook requests'
+});
+
+app.post('/webhooks/instagram', webhookLimiter, (req, res) => {
+  // Handle webhook
+});
+```
+
+### 5. Asynchronous Processing
+
+Always respond to webhooks immediately (within 30 seconds):
+
+```javascript
+app.post('/webhooks/instagram', async (req, res) => {
+  // Respond immediately
+  res.status(200).send('ok');
+
+  // Process asynchronously in background
+  processWebhookAsync(req.body).catch(err => {
+    console.error('Webhook processing error:', err);
+  });
+});
+
+async function processWebhookAsync(data) {
+  // Long-running operations here
+  // Database updates, API calls, etc.
+}
+```
+
+---
+
+## Testing Your Webhook
+
+### Using curl
+
+```bash
+# Test webhook verification
+curl -X GET "http://localhost:3000/webhooks/instagram?hub.mode=subscribe&hub.challenge=test_challenge&hub.verify_token=YOUR_VERIFY_TOKEN"
+
+# Test webhook event (POST)
+curl -X POST http://localhost:3000/webhooks/instagram \
+  -H "Content-Type: application/json" \
+  -d '{
+    "object": "instagram",
+    "entry": [{
+      "id": "123456789",
+      "time": 1643645321,
+      "changes": [{
+        "field": "instagram_business_account",
+        "value": {
+          "id": "987654321",
+          "username": "your_business_account"
+        }
+      }]
+    }]
+  }'
+```
+
+### Using Postman
+
+1. Import webhook payloads from Meta's documentation
+2. Set request type to POST
+3. Add raw JSON body with sample webhook events
+4. Test locally or against staging server
+
+### Using Meta's Test Tool
+
+- Meta Developer Dashboard includes webhook testing tools
+- Send test events to verify your implementation
+
+---
+
+## Troubleshooting
+
+### Webhook Not Verifying
+
+**Problem:** "Webhook verification failed" error
+
+**Solutions:**
+- Verify HTTPS is working: `curl -I https://your-webhook-url.com`
+- Check verify token matches exactly (case-sensitive)
+- Ensure URL is publicly accessible (no firewall blocking)
+- Check that endpoint returns HTTP 200 with challenge value
+- Verify timeout is less than 30 seconds
+
+### Not Receiving Webhook Events
+
+**Problem:** Webhooks configured but not receiving events
+
+**Solutions:**
+- Confirm webhook subscription is active in Meta dashboard
+- Check app is in published state
+- Verify Instagram business account permissions
+- Check server logs for incoming requests
+- Review webhook subscription fields are selected
+- Ensure app secret is correct for signature validation
+
+### Signature Validation Fails
+
+**Problem:** X-Hub-Signature validation failing
+
+**Solutions:**
+- Use raw request body (not parsed JSON)
+- Verify app secret matches Meta dashboard
+- Check signature uses SHA1 hashing
+- Ensure raw body is not modified before validation
+
+### URL Not Accessible
+
+**Problem:** "URL must be accessible" error
+
+**Solutions:**
+- Remove any authentication redirects (301/302)
+- Test with: `curl -v https://your-webhook-url.com`
+- Check DNS is resolving correctly
+- Verify firewall allows HTTPS traffic
+- Test with different user agents
+
+---
+
+## Monitoring & Logging
+
+### Implement Comprehensive Logging
+
+```javascript
+function logWebhookEvent(eventType, data, status) {
+  const timestamp = new Date().toISOString();
+  const logEntry = {
+    timestamp,
+    eventType,
+    data,
+    status,
+    processedAt: Date.now()
+  };
+
+  // Log to file or service
+  console.log(JSON.stringify(logEntry));
+  
+  // Store in database for analysis
+  storeWebhookLog(logEntry);
+}
+```
+
+### Monitor Webhook Health
+
+- Track webhook delivery success rate
+- Monitor response times
+- Alert on signature validation failures
+- Track event processing errors
+- Monitor disk space for logs
+
+---
+
+## Webhook Event Examples
+
+### Account Update Event
+
+```json
+{
+  "object": "instagram",
+  "entry": [{
+    "id": "123456789",
+    "time": 1643645321,
+    "changes": [{
+      "field": "instagram_business_account",
+      "value": {
+        "id": "987654321",
+        "username": "photo_grid_demo",
+        "name": "Photo Grid Demo",
+        "biography": "Beautiful photo organization",
+        "website": "https://photogrid.com",
+        "profile_picture_url": "https://...",
+        "followers_count": 5000,
+        "follows_count": 150,
+        "media_count": 85
+      }
+    }]
+  }]
+}
+```
+
+### New Post Event
+
+```json
+{
+  "object": "instagram",
+  "entry": [{
+    "id": "123456789",
+    "time": 1643645321,
+    "changes": [{
+      "field": "instagram_business_content_node",
+      "value": {
+        "id": "post_id_123",
+        "caption": "Amazing sunset at the beach!",
+        "media_type": "IMAGE",
+        "media_url": "https://...",
+        "timestamp": "2026-02-01T18:30:00+0000",
+        "like_count": 245,
+        "comments_count": 12
+      }
+    }]
+  }]
+}
+```
+
+---
+
+## Callback URL Endpoint Specifications
+
+### Endpoint Details
+
+**Base URL:** https://photogrid.yourdomain.com
+**Path:** /webhooks/instagram
+**Full URL:** https://photogrid.yourdomain.com/webhooks/instagram
+
+**Supported Methods:**
+- GET (verification only)
+- POST (event delivery)
+
+**Content-Type:** application/json
+
+**Response Time:** Must respond within 30 seconds
+
+**TLS Version:** 1.2 or higher
+
+**Retry Policy:** Meta retries failed webhooks with exponential backoff
+
+---
+
+## Sample Callback URL for Photo Grid
+
+```
+https://photogrid.kleinindustries.com/webhooks/instagram
+```
+
+**Configuration in Meta Dashboard:**
+- Callback URL: `https://photogrid.kleinindustries.com/webhooks/instagram`
+- Verify Token: `[Your generated verify token]`
+- Subscribed Fields: `instagram_business_account`, `instagram_business_content_node`, `message_echoes`, `instagram_comment`
+
+---
+
+## Support & Resources
+
+**Meta Documentation:**
+- Webhooks Reference: https://developers.facebook.com/docs/instagram-api/webhooks
+- Graph API Reference: https://developers.facebook.com/docs/instagram-api
+- Permissions: https://developers.facebook.com/docs/instagram-api/permissions
+
+**Photo Grid Support:**
+- Email: lineupmusicandsound@gmail.com
+- Documentation: https://photogrid.kleinindustries.com/docs
+
+---
+
+**Last Updated:** February 1, 2026
+**Version:** 1.0
+**Status:** Production Ready
